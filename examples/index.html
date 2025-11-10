@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - FBX loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+
+	<body>
+		<div id="info">
+    <h1>Escena 3D: Práctica Integral</h1>
+    <div id="controls">
+      <strong>Teclas:</strong>
+      <ul>
+        <li>W A S D = Mover</li>
+        <li>Shift = Correr</li>
+        <li>Space = Saltar</li>
+        <li>V = Rumba, B = Flair, N = Samba</li>
+      </ul>
+    </div>
+  </div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+import * as THREE from 'three';
+import Stats from 'three/addons/libs/stats.module.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { Audio, AudioListener, AudioLoader } from 'three';
+
+// --------------------------------------
+let camera, scene, renderer, stats, object, loader, mixer;
+const clock = new THREE.Clock();
+const keyState = {};
+const dynamicObjects = [];
+let speed = 80;       // velocidad normal
+let runSpeed = 160;   // velocidad al correr
+// --------------------------------------
+
+init();
+function init() {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+
+  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+  camera.position.set(0, 150, 300);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xa0a0a0);
+  scene.fog = new THREE.Fog(0xa0a0a0, 200, 800);
+
+  // ☀️ Iluminación básica
+  const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+  hemiLight.position.set(0, 200, 0);
+  scene.add(hemiLight);
+
+  const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+  dirLight.position.set(0, 200, 100);
+  dirLight.castShadow = true;
+  dirLight.shadow.camera.top = 180;
+  dirLight.shadow.camera.bottom = -100;
+  dirLight.shadow.camera.left = -120;
+  dirLight.shadow.camera.right = 120;
+  scene.add(dirLight);
+
+  // 🏠 Habitación 3D
+  const textureLoader = new THREE.TextureLoader();
+
+  const pisoTex = textureLoader.load('models/rgbe/ground.jpg');
+  pisoTex.wrapS = pisoTex.wrapT = THREE.RepeatWrapping;
+  pisoTex.repeat.set(4, 4);
+  const pisoMat = new THREE.MeshStandardMaterial({ map: pisoTex, roughness: 0.9 });
+  const piso = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), pisoMat);
+  piso.rotation.x = -Math.PI / 2;
+  piso.receiveShadow = true;
+  scene.add(piso);
+
+  const paredTex = textureLoader.load('models/rgbe/ground.jpg');
+  paredTex.wrapS = paredTex.wrapT = THREE.RepeatWrapping;
+  paredTex.repeat.set(4, 2);
+  const roomGeo = new THREE.BoxGeometry(500, 250, 500);
+  const roomMat = new THREE.MeshStandardMaterial({
+    map: paredTex,
+    side: THREE.BackSide,
+    roughness: 0.8,
+  });
+  const habitacion = new THREE.Mesh(roomGeo, roomMat);
+  habitacion.position.y = 125;
+  scene.add(habitacion);
+
+  const techoTex = textureLoader.load('models/rgbe/ground.jpg');
+  const techoMat = new THREE.MeshStandardMaterial({ map: techoTex, roughness: 0.8 });
+  const techo = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), techoMat);
+  techo.position.y = 250;
+  techo.rotation.x = Math.PI / 2;
+  scene.add(techo);
+
+  // 🔊 Música ambiental
+  const listener = new AudioListener();
+  camera.add(listener);
+  const sound = new Audio(listener);
+  const audioLoader = new AudioLoader();
+  audioLoader.load('models/rgbe/Snow-Informer.mp3', (buffer) => {
+    sound.setBuffer(buffer);
+    sound.setLoop(true);
+    sound.setVolume(0.3);
+    sound.play();
+  });
+
+  // 🧍‍♂️ Cargar personaje humano (animación inicial)
+  loader = new FBXLoader();
+  loader.load('models/fbx/Walking.fbx', (group) => {
+    object = group;
+    mixer = new THREE.AnimationMixer(object);
+    const action = mixer.clipAction(object.animations[0]);
+    action.play();
+    object.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    object.scale.set(0.8, 0.8, 0.8);
+    object.position.set(0, 0, 0);
+    scene.add(object);
+  });
+
+  // 🧱 Crear 5 objetos dinámicos
+  createDynamicObject('box', 30, 20, -50);
+  createDynamicObject('sphere', -40, 20, 40);
+  createDynamicObject('box', 70, 20, 20);
+  createDynamicObject('sphere', -60, 20, -40);
+  createDynamicObject('box', 0, 20, 80);
+
+  // ⚙️ Render, cámara y controles
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  container.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 100, 0);
+  controls.update();
+
+  stats = new Stats();
+  container.appendChild(stats.dom);
+
+  // ✅ Eventos de teclado
+  window.addEventListener('resize', onWindowResize);
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', (e) => keyState[e.code] = false);
+
+  animate();
+}
+
+// 🧩 Evento de tecla presionada
+function onKeyDown(e) {
+  keyState[e.code] = true;
+
+  // 👇 Al presionar B se cambia de baile
+  if (e.code === 'KeyV') {
+    cambiarBaile('models/fbx/Walking.fbx');
+  }
+  if (e.code === 'KeyB') {
+    cambiarBaile('models/fbx/Silly_Dancing.fbx');
+  }
+  if (e.code === 'KeyN') {
+    cambiarBaile('models/fbx/Samba_Dancing.fbx');
+  }
+}
+
+// 🔁 Función para cambiar de animación (otro baile)
+function cambiarBaile(rutaFBX) {
+  if (object) {
+    scene.remove(object);
+    object.traverse((child) => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
+    });
+  }
+
+  loader.load(rutaFBX, (group) => {
+    object = group;
+    object.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    object.scale.set(0.8, 0.8, 0.8);
+    object.position.set(0, 0, 0);
+    scene.add(object);
+
+    if (object.animations && object.animations.length) {
+      mixer = new THREE.AnimationMixer(object);
+      const action = mixer.clipAction(object.animations[0]);
+      action.play();
+    }
+  });
+}
+
+// 🔹 Crea objetos dinámicos
+function createDynamicObject(type, x, y, z) {
+  let geometry = (type === 'sphere') ? new THREE.SphereGeometry(20, 16, 16) : new THREE.BoxGeometry(30, 30, 30);
+  let mat = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff, metalness: 0.2, roughness: 0.8 });
+  let mesh = new THREE.Mesh(geometry, mat);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  dynamicObjects.push({ mesh, velocity: new THREE.Vector3() });
+}
+
+// 🔹 Movimiento del personaje (igual que antes)
+function updateCharacter(dt) {
+  if (!object) return;
+
+  let currentSpeed = speed;
+  if (keyState['ShiftLeft']) currentSpeed = runSpeed; // correr al presionar Shift
+  let move = currentSpeed * dt;
+
+  if (keyState['KeyW']) object.position.z -= move;
+  if (keyState['KeyS']) object.position.z += move;
+  if (keyState['KeyA']) object.position.x -= move;
+  if (keyState['KeyD']) object.position.x += move;
+}
+
+// 🔹 Física simple
+function updateDynamics(dt) {
+  for (let o of dynamicObjects) {
+    o.velocity.y -= 9.8 * dt;
+    o.mesh.position.addScaledVector(o.velocity, dt);
+    if (o.mesh.position.y < 15) {
+      o.mesh.position.y = 15;
+      o.velocity.y *= -0.6;
+    }
+  }
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// 🔁 Animación principal
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = clock.getDelta();
+  if (mixer) mixer.update(dt);
+  updateCharacter(dt);
+  renderer.render(scene, camera);
+  stats.update();
+}
+</script>
+
+
+<footer id="footer"">
+  <p>Integrantes: <p>Ana Luisa Xochicale González - 23200909</p> <p>Alan Lugo Hernandez - 23200859</p></p>
+</footer>
+	</body>
+</html>
